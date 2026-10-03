@@ -1,0 +1,4 @@
+# sudo-button: root-only access, matched by this unit's USB serial (its MAC), so other ESP32s are untouched.
+# install.sh fills in the serial placeholder below with the serial of the connected board.
+# Sorts after 99-platformio-udev.rules (which sets MODE 0666 for all 303a:1001 devices).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", ATTRS{serial}=="@SERIAL@", SYMLINK+="sudo-button", OWNER="root", GROUP="root", MODE="0600", TAG-="uaccess"

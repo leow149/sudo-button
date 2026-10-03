@@ -1,0 +1,114 @@
+#!/usr/bin/python3 -I
+"""Root daemon: owns the sudo-button serial port, serialises approval requests.
+
+Clients (sudo-btn-run, running as root) send one JSON line over a root-only unix
+socket and get one JSON line back. Fails closed: any problem means "not approved".
+"""
+import base64
+import json
+import os
+import secrets
+import signal
+import socket
+import socketserver
+import struct
+import sys
+import threading
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import sbtn  # noqa: E402
+
+SOCK = "/run/sudo-btn/sock"
+lock = threading.Lock()  # the device handles one request at a time
+dev = None
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def get_device():
+    global dev
+    if dev is None:
+        d = sbtn.Device()
+        d.open()
+        try:
+            d.ping()
+        except Exception:
+            d.close()
+            raise
+        dev = d
+    return dev
+
+
+def drop_device():
+    global dev
+    if dev:
+        dev.close()
+    dev = None
+
+
+def decide(req):
+    try:
+        payload = base64.b64decode(req["payload_b64"], validate=True)
+        timeout = int(req.get("timeout", 30))
+    except Exception:
+        return {"ok": False, "reason": "bad-request"}
+    if not payload or len(payload) > sbtn.MAX_PAYLOAD:
+        return {"ok": False, "reason": "bad-request"}
+    try:
+        secret = sbtn.load_secret()
+    except Exception as e:
+        log(f"secret: {e}")
+        return {"ok": False, "reason": "not-provisioned"}
+
+    with lock:
+        try:
+            d = get_device()
+            if not d.ping():
+                return {"ok": False, "reason": "device-unpaired"}
+            nonce = secrets.token_hex(16)
+            ok, reason = d.request(nonce, timeout, payload, secret)
+        except sbtn.DeviceError as e:
+            log(f"device error: {e}")
+            drop_device()
+            return {"ok": False, "reason": "device-unavailable"}
+    log(f"request -> {'APPROVED' if ok else 'refused'} ({reason})")
+    return {"ok": ok, "reason": reason}
+
+
+class Handler(socketserver.StreamRequestHandler):
+    def handle(self):
+        uid = struct.unpack("3i", self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
+        if uid != 0:
+            return
+        try:
+            line = self.rfile.readline(16384)
+            resp = decide(json.loads(line))
+        except Exception:
+            resp = {"ok": False, "reason": "bad-request"}
+        self.wfile.write(json.dumps(resp).encode() + b"\n")
+
+
+class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+def main():
+    if os.geteuid() != 0:
+        sys.exit("must run as root")
+    os.makedirs(os.path.dirname(SOCK), mode=0o700, exist_ok=True)
+    try:
+        os.unlink(SOCK)
+    except FileNotFoundError:
+        pass
+    old = os.umask(0o177)
+    srv = Server(SOCK, Handler)
+    os.umask(old)
+    signal.signal(signal.SIGTERM, lambda *a: threading.Thread(target=srv.shutdown).start())
+    log("sudo-btn-daemon ready")
+    srv.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

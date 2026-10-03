@@ -1,0 +1,20 @@
+# build output and fetched dependencies
+firmware/.pio/
+firmware/managed_components/
+firmware/sdkconfig.*
+!firmware/sdkconfig.defaults
+
+# logs: upload/build logs contain the board's MAC address and local paths
+*.log
+
+# local secrets / pairing material (never belongs in the repo)
+secret
+secret.new
+*.key
+.env
+
+# python / editor noise
+__pycache__/
+*.pyc
+.vscode/
+.idea/

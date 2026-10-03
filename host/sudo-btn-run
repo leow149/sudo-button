@@ -1,0 +1,88 @@
+#!/usr/bin/python3 -I
+"""Run a command as root after physical approval on the sudo-button.
+
+    sudo sudo-btn-run [--timeout SECS] [--] COMMAND [ARGS...]
+
+The command shown on the device is exactly what gets exec'd. If the device is
+missing, unpaired, denies, or times out, nothing runs.
+"""
+import base64
+import json
+import os
+import shlex
+import shutil
+import socket
+import sys
+
+SOCK = "/run/sudo-btn/sock"
+MAX_PAYLOAD = 3072
+
+
+def die(msg, code=1):
+    print(f"sudo-btn: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def has_ctrl(s):
+    return any(ord(c) < 0x20 or ord(c) == 0x7F for c in s)
+
+
+def main():
+    if os.geteuid() != 0 or not os.environ.get("SUDO_USER"):
+        die("run me via: sudo sudo-btn-run COMMAND...", 2)
+
+    args = sys.argv[1:]
+    timeout = 30
+    while args and args[0].startswith("--"):
+        if args[0] == "--":
+            args.pop(0)
+            break
+        if args[0] == "--timeout" and len(args) > 1 and args[1].isdigit():
+            timeout = int(args[1])
+            args = args[2:]
+        else:
+            die("usage: sudo-btn-run [--timeout SECS] [--] COMMAND [ARGS...]", 2)
+    if not args:
+        die("usage: sudo-btn-run [--timeout SECS] [--] COMMAND [ARGS...]", 2)
+
+    cwd = os.getcwd()
+    user = os.environ["SUDO_USER"]
+    if has_ctrl(user) or has_ctrl(cwd):
+        die("refusing: control characters in user or cwd", 2)
+
+    exe = args[0]
+    path = os.path.abspath(exe) if "/" in exe else shutil.which(exe, path=os.environ.get("PATH"))
+    if not path or not os.path.isfile(path) or not os.access(path, os.X_OK):
+        die(f"{exe}: command not found", 127)
+
+    # Show the resolved path so the screen is unambiguous
+    shown = shlex.join([path] + args[1:])
+    st = os.stat(path)
+    if st.st_uid != 0 or st.st_mode & 0o022:
+        shown = f"!! {path} is NOT root-owned or is writable by others !!\n" + shown
+
+    payload = f"{user}\n{cwd}\n{shown}".encode("utf-8", "surrogateescape")
+    if len(payload) > MAX_PAYLOAD:
+        die("refusing: command too long to display in full on the device", 2)
+
+    req = {"payload_b64": base64.b64encode(payload).decode(), "timeout": timeout}
+    print(f"sudo-btn: waiting for approval on the device ({timeout}s)...", file=sys.stderr)
+    try:
+        with socket.socket(socket.AF_UNIX) as s:
+            s.settimeout(timeout + 150)  # may queue behind another request
+            s.connect(SOCK)
+            s.sendall(json.dumps(req).encode() + b"\n")
+            resp = json.loads(s.makefile().readline())
+    except (OSError, ValueError) as e:
+        die(f"daemon unavailable ({e}); is sudo-btn.service running?")
+
+    if resp.get("ok") is not True:
+        die(f"not approved ({resp.get('reason', 'unknown')})", 1)
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(path, [exe] + args[1:])
+
+
+if __name__ == "__main__":
+    main()

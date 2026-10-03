@@ -1,0 +1,21 @@
+[Unit]
+Description=sudo-button approval daemon
+ConditionPathExists=/etc/sudo-btn/secret
+
+[Service]
+ExecStart=/usr/local/lib/sudo-btn/sudo-btn-daemon
+Restart=always
+RestartSec=2
+RuntimeDirectory=sudo-btn
+RuntimeDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

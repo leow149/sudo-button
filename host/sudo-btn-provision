@@ -1,0 +1,50 @@
+#!/usr/bin/python3 -I
+"""Pair this PC with an unpaired sudo-button. Run as root: sudo sudo-btn-provision"""
+import os
+import secrets
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import sbtn  # noqa: E402
+
+
+def sc(*a):
+    return subprocess.run(["systemctl", *a], capture_output=True).returncode
+
+
+def main():
+    if os.geteuid() != 0:
+        sys.exit("must run as root: sudo sudo-btn-provision")
+
+    sc("stop", "sudo-btn.service")  # the daemon holds the serial port
+    d = sbtn.Device()
+    d.open()
+    try:
+        if d.ping():
+            sys.exit("Device is already paired. On the device, hold 'forget host' for 3s, then rerun.")
+        key = secrets.token_hex(32)
+        os.makedirs(os.path.dirname(sbtn.SECRET_PATH), mode=0o700, exist_ok=True)
+        tmp = sbtn.SECRET_PATH + ".new"
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key + "\n")
+        ok, why = d.provision(key)
+        if not ok:
+            os.unlink(tmp)
+            sys.exit(f"pairing failed: {why}")
+        os.rename(tmp, sbtn.SECRET_PATH)
+    finally:
+        d.close()
+
+    print("Paired. Secret stored in", sbtn.SECRET_PATH)
+    sc("enable", "--now", "sudo-btn.service")
+    print("Daemon started.")
+
+
+if __name__ == "__main__":
+    main()
