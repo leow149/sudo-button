@@ -89,6 +89,10 @@ user can't open it, so it can't be flashed by accident. Read `install.sh` before
 - Opening the board's serial port resets the chip (USB Serial/JTAG behaviour), which is why the daemon keeps it open.
 - This is a personal project, not an audited security product.
 
+## License
+
+[MIT](LICENSE). The bundled font data has its own license, see below.
+
 ## Third-party
 
 The command font is generated from [Hack](https://sourcefoundry.org/hack/) (MIT / Bitstream Vera license, see
